@@ -1,4 +1,6 @@
 import json
+from email.message import Message
+from io import BytesIO
 
 import muse_reel.api as api
 from muse_reel.database import FootageDatabase
@@ -85,3 +87,106 @@ def test_read_only_api_requires_token_and_stays_loopback_only(tmp_path):
         assert "localhost" in str(error)
     else:
         raise AssertionError("The development API should reject non-local binding")
+
+
+def _invoke_index_sync(path, database_path, payload, token="sync-secret"):
+    handler = object.__new__(api._ReadOnlyHandler)
+    body = json.dumps(payload).encode("utf-8")
+    handler.database_path = database_path
+    handler.api_token = "api-secret"
+    handler.sync_token = "sync-secret"
+    handler.headers = Message()
+    handler.headers["Authorization"] = f"Bearer {token}"
+    handler.headers["Content-Type"] = "application/json"
+    handler.headers["Content-Length"] = str(len(body))
+    handler.rfile = BytesIO(body)
+    handler.path = path
+    captured = {}
+    handler._send_json = lambda status, response: captured.update(
+        status=status, payload=response
+    )
+    handler.do_POST()
+    return captured
+
+
+def test_index_sync_imports_only_searchable_metadata(tmp_path):
+    database_path = tmp_path / "hosted.sqlite"
+    payload = {
+        "project": "Napoleon",
+        "scenes": [
+            {
+                "media_key": "7",
+                "filename": "status.mov",
+                "segment_index": 2,
+                "start_seconds": 8.0,
+                "end_seconds": 16.0,
+                "caption": "A worker cuts lumber.",
+                "tags": ["lumber", "power tool"],
+            }
+        ],
+    }
+
+    result = _invoke_index_sync("/v1/admin/index", database_path, payload)
+
+    assert result == {"status": 200, "payload": {"status": "ok", "scenes": 1}}
+    with FootageDatabase(database_path) as database:
+        project = database.get_project("Napoleon")
+        scenes = database.search_scenes(project["id"], "lumber")
+        assert len(scenes) == 1
+        assert scenes[0]["filename"] == "status.mov"
+        assert scenes[0]["file_path"].startswith("muse-index://")
+
+
+def test_index_sync_requires_separate_token_and_valid_filenames(tmp_path):
+    database_path = tmp_path / "hosted.sqlite"
+    payload = {
+        "project": "Napoleon",
+        "scenes": [
+            {
+                "media_key": "7",
+                "filename": "../status.mov",
+                "segment_index": 1,
+                "start_seconds": 0,
+                "end_seconds": 8,
+                "caption": "A worker cuts lumber.",
+                "tags": ["lumber"],
+            }
+        ],
+    }
+    unauthorized = _invoke_index_sync(
+        "/v1/admin/index", database_path, payload, token="wrong"
+    )
+    invalid_payload = _invoke_index_sync("/v1/admin/index", database_path, payload)
+
+    assert unauthorized["status"] == 401
+    assert invalid_payload["status"] == 400
+
+
+def test_health_is_public_and_public_binding_requires_explicit_opt_in(tmp_path, monkeypatch):
+    health = _invoke_read_only_handler("/health", tmp_path / "index.sqlite", token="")
+    assert health == {"status": 200, "payload": {"status": "ok"}}
+
+    captured = {}
+
+    class FakeServer:
+        def __init__(self, address, handler):
+            captured["address"] = address
+            captured["handler"] = handler
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(api, "ThreadingHTTPServer", FakeServer)
+    api.serve_read_only_api(
+        tmp_path / "index.sqlite",
+        api_token="api-secret",
+        sync_token="sync-secret",
+        host="0.0.0.0",
+        port=10000,
+        allow_public_bind=True,
+    )
+    assert captured["address"] == ("0.0.0.0", 10000)
+    assert captured["closed"]

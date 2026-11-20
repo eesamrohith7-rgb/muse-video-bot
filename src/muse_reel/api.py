@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -12,20 +13,23 @@ from .database import FootageDatabase
 class _ReadOnlyHandler(BaseHTTPRequestHandler):
     database_path: Path
     api_token: str
+    sync_token: str
+    max_index_bytes = 2 * 1024 * 1024
 
     def do_GET(self) -> None:
+        route = urlsplit(self.path)
+        if route.path == "/health":
+            self._send_json(200, {"status": "ok"})
+            return
+
         supplied_token = self.headers.get("Authorization", "")
         expected_token = f"Bearer {self.api_token}"
         if not hmac.compare_digest(supplied_token, expected_token):
             self._send_json(401, {"error": "authentication required"})
             return
 
-        route = urlsplit(self.path)
         try:
             with FootageDatabase(self.database_path) as database:
-                if route.path == "/health":
-                    self._send_json(200, {"status": "ok"})
-                    return
                 if route.path == "/v1/projects":
                     projects = [
                         {"id": row["id"], "name": row["name"]}
@@ -36,10 +40,49 @@ class _ReadOnlyHandler(BaseHTTPRequestHandler):
                 if route.path == "/v1/scenes/search":
                     self._search_scenes(database, parse_qs(route.query))
                     return
-        except (OSError, ValueError) as error:
-            self._send_json(500, {"error": str(error)})
+        except (OSError, sqlite3.Error, ValueError):
+            self._send_json(500, {"error": "index unavailable"})
             return
         self._send_json(404, {"error": "route not found"})
+
+    def do_POST(self) -> None:
+        route = urlsplit(self.path)
+        if route.path != "/v1/admin/index":
+            self._send_json(404, {"error": "route not found"})
+            return
+        if not self.sync_token:
+            self._send_json(503, {"error": "index sync is disabled"})
+            return
+        supplied_token = self.headers.get("Authorization", "")
+        expected_token = f"Bearer {self.sync_token}"
+        if not hmac.compare_digest(supplied_token, expected_token):
+            self._send_json(401, {"error": "authentication required"})
+            return
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._send_json(400, {"error": "invalid content length"})
+            return
+        if content_length < 1:
+            self._send_json(400, {"error": "request body is required"})
+            return
+        if content_length > self.max_index_bytes:
+            self._send_json(413, {"error": "index is too large"})
+            return
+        if self.headers.get_content_type() != "application/json":
+            self._send_json(415, {"error": "application/json is required"})
+            return
+        try:
+            payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            with FootageDatabase(self.database_path) as database:
+                scene_count = database.replace_project_scene_index(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            self._send_json(400, {"error": "invalid index payload"})
+            return
+        except (OSError, sqlite3.Error):
+            self._send_json(500, {"error": "index could not be saved"})
+            return
+        self._send_json(200, {"status": "ok", "scenes": scene_count})
 
     def _search_scenes(self, database: FootageDatabase, query: dict[str, list[str]]) -> None:
         project_name = query.get("project", [""])[0].strip()
@@ -96,12 +139,16 @@ def serve_read_only_api(
     database_path: str | Path,
     *,
     api_token: str,
+    sync_token: str = "",
     host: str = "127.0.0.1",
     port: int = 8765,
+    allow_public_bind: bool = False,
 ) -> None:
     if not api_token:
         raise ValueError("An API token is required")
-    if host not in {"127.0.0.1", "localhost"}:
+    if host not in {"127.0.0.1", "localhost"} and not (
+        host == "0.0.0.0" and allow_public_bind
+    ):
         raise ValueError("The development API can only bind to localhost")
 
     handler = type(
@@ -110,6 +157,7 @@ def serve_read_only_api(
         {
             "database_path": Path(database_path).expanduser().resolve(),
             "api_token": api_token,
+            "sync_token": sync_token,
         },
     )
     server = ThreadingHTTPServer((host, port), handler)

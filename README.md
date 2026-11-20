@@ -97,26 +97,50 @@ construction-reel --db data/footage.sqlite scan "/path/to/footage" --project "Pr
 
 The scanner never moves, renames, or deletes source files.
 
-## Local connector prototype
+## Local and hosted connector API
 
-The read-only API lets a future Muse connector search indexed scene captions and
-tags. It binds to localhost only, returns metadata without local file paths or image
-bytes, and requires a bearer token:
+The local API binds to localhost and requires a bearer token:
 
 ```bash
 export MUSE_REEL_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 construction-reel serve
 ```
 
-Available endpoints are `GET /v1/projects` and
-`GET /v1/scenes/search?project=Riverside%20Villa&q=framing`. Send the token as
-`Authorization: Bearer <token>`.
+The read endpoints are `GET /v1/projects` and
+`GET /v1/scenes/search?project=Riverside%20Villa&q=framing`. Both require
+`Authorization: Bearer <MUSE_REEL_API_TOKEN>`. The unauthenticated `/health`
+endpoint returns only `{"status":"ok"}`.
 
-This local server cannot be connected directly from Meta Muse. A Muse listing needs
-a hosted HTTPS endpoint, authentication and privacy documentation, business
-verification, test access, and Meta review. See the official
-[Muse connector guidelines](https://platform.muse.ai/docs). Do not expose the local
-API to the public internet as-is.
+### Render deployment
+
+`render.yaml` prepares a Render web service in Singapore with HTTPS, a generated
+API token, a separate generated index-sync token, and a 1 GB persistent disk. It
+uses Render's paid Starter service because Free web services cannot attach a
+persistent disk. Check current [Render service and disk pricing](https://render.com/pricing)
+before creating the service.
+
+After deploying the Blueprint, copy the service's generated `MUSE_REEL_API_TOKEN`
+and `MUSE_REEL_SYNC_TOKEN` into your local shell's environment, then sync a project:
+
+```bash
+export MUSE_REEL_API_TOKEN="<API token from Render>"
+export MUSE_REEL_SYNC_TOKEN="<sync token from Render>"
+export MUSE_REEL_SYNC_URL="https://<your-service>.onrender.com/v1/admin/index"
+construction-reel --db data/footage.sqlite sync --project "Riverside Villa"
+```
+
+Sync uploads only project names, filenames, scene timestamps, captions, and tags.
+It does not upload footage, preview frames, or local file paths. The separate
+`POST /v1/admin/index` endpoint uses the sync token and must not be exposed as a Muse
+tool. Muse should receive only the bearer token for the read-only project and scene
+search endpoints.
+
+A hosted endpoint is public on the internet, though the search routes require the
+API token. Do not sync private project metadata unless you intend to store it on
+Render and make it available to the Muse connector. Meta's connector submission
+also requires business and privacy details, test access, and review; see the
+official [Muse connector guidelines](https://platform.muse.ai/docs). Meeting the
+guidelines does not guarantee approval.
 
 ## Scan behavior
 

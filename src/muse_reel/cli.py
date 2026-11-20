@@ -14,6 +14,7 @@ from .analysis import (
 from .api import serve_read_only_api
 from .database import FootageDatabase
 from .scanner import find_media, scan_media
+from .sync import sync_project_index
 
 
 DEFAULT_DATABASE = "data/footage.sqlite"
@@ -66,11 +67,24 @@ def build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("--project", required=True)
     search_parser.add_argument("--limit", type=int, default=20)
 
+    sync_parser = subparsers.add_parser(
+        "sync", help="Upload one project's captions and tags to a hosted index"
+    )
+    sync_parser.add_argument("--project", required=True)
+    sync_parser.add_argument(
+        "--url", default=os.environ.get("MUSE_REEL_SYNC_URL", "")
+    )
+
     serve_parser = subparsers.add_parser(
         "serve", help="Run the local read-only search API for a future Muse connector"
     )
     serve_parser.add_argument("--host", default="127.0.0.1")
-    serve_parser.add_argument("--port", type=int, default=8765)
+    serve_parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8765")))
+    serve_parser.add_argument(
+        "--allow-public-bind",
+        action="store_true",
+        help="Allow binding to 0.0.0.0 behind a hosted HTTPS reverse proxy",
+    )
     return parser
 
 
@@ -111,8 +125,10 @@ def main() -> None:
         serve_read_only_api(
             args.db,
             api_token=api_token,
+            sync_token=os.environ.get("MUSE_REEL_SYNC_TOKEN", ""),
             host=args.host,
             port=args.port,
+            allow_public_bind=args.allow_public_bind,
         )
         return
 
@@ -146,6 +162,27 @@ def main() -> None:
                     print(f"  Tags: {tags}")
                 print(f"  Preview: {row['thumbnail_path']}")
             print(f"\nMatching scenes: {len(rows)}")
+            return
+
+        if args.command == "sync":
+            endpoint = args.url.strip()
+            if not endpoint:
+                raise SystemExit(
+                    "Set MUSE_REEL_SYNC_URL or pass --url with the hosted index endpoint."
+                )
+            try:
+                count = sync_project_index(
+                    database,
+                    project_id,
+                    endpoint=endpoint,
+                    token=os.environ.get("MUSE_REEL_SYNC_TOKEN", ""),
+                )
+            except (RuntimeError, ValueError) as error:
+                raise SystemExit(str(error)) from error
+            print(
+                f"Synced {count} scenes for '{project['name']}'. "
+                "Only captions, tags, filenames, and timestamps were sent."
+            )
             return
 
         if args.command == "list":

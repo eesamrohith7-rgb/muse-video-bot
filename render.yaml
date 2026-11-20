@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: muse-reel-search
+    runtime: python
+    plan: starter
+    region: singapore
+    buildCommand: pip install .
+    startCommand: construction-reel --db /var/data/footage.sqlite serve --host 0.0.0.0 --port $PORT --allow-public-bind
+    healthCheckPath: /health
+    envVars:
+      - key: MUSE_REEL_API_TOKEN
+        generateValue: true
+      - key: MUSE_REEL_SYNC_TOKEN
+        generateValue: true
+    disk:
+      name: scene-index
+      mountPath: /var/data
+      sizeGB: 1

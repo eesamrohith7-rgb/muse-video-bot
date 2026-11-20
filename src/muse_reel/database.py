@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from pathlib import Path
 from typing import Iterable, Optional
@@ -354,3 +355,166 @@ class FootageDatabase:
             """,
             (project_id, query, pattern, pattern, pattern, max(1, min(limit, 100))),
         ).fetchall()
+
+    def export_project_scene_index(self, project_id: int) -> dict[str, object]:
+        project = self.connection.execute(
+            "SELECT name FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
+        if project is None:
+            raise ValueError("Project not found")
+        rows = self.connection.execute(
+            """
+            SELECT sm.id AS media_key, sm.filename, ss.segment_index,
+                   ss.start_seconds, ss.end_seconds, ss.caption, ss.tags_json
+            FROM scene_segments AS ss
+            JOIN source_media AS sm ON sm.id = ss.source_media_id
+            WHERE sm.project_id = ?
+            ORDER BY sm.filename COLLATE NOCASE, ss.start_seconds
+            """,
+            (project_id,),
+        ).fetchall()
+        return {
+            "project": project["name"],
+            "scenes": [
+                {
+                    "media_key": str(row["media_key"]),
+                    "filename": row["filename"],
+                    "segment_index": row["segment_index"],
+                    "start_seconds": row["start_seconds"],
+                    "end_seconds": row["end_seconds"],
+                    "caption": row["caption"],
+                    "tags": json.loads(row["tags_json"]),
+                }
+                for row in rows
+            ],
+        }
+
+    def replace_project_scene_index(self, payload: object) -> int:
+        if not isinstance(payload, dict):
+            raise ValueError("Index payload must be an object")
+        project_name = payload.get("project")
+        scenes = payload.get("scenes")
+        if not isinstance(project_name, str) or not project_name.strip() or len(project_name) > 200:
+            raise ValueError("Project name is invalid")
+        if not isinstance(scenes, list) or len(scenes) > 20000:
+            raise ValueError("Scenes must be an array with at most 20000 items")
+
+        normalized: list[tuple[str, str, int, float, float, str, str]] = []
+        seen: set[tuple[str, int]] = set()
+        media_names: dict[str, str] = {}
+        for scene in scenes:
+            if not isinstance(scene, dict):
+                raise ValueError("Each scene must be an object")
+            media_key = scene.get("media_key")
+            filename = scene.get("filename")
+            segment_index = scene.get("segment_index")
+            start_seconds = scene.get("start_seconds")
+            end_seconds = scene.get("end_seconds")
+            caption = scene.get("caption", "")
+            tags = scene.get("tags", [])
+            if not isinstance(media_key, str) or not media_key or len(media_key) > 64:
+                raise ValueError("Scene media key is invalid")
+            if (
+                not isinstance(filename, str)
+                or not filename
+                or len(filename) > 512
+                or "/" in filename
+                or "\\" in filename
+            ):
+                raise ValueError("Scene filename must be a basename")
+            if media_key in media_names and media_names[media_key] != filename:
+                raise ValueError("A media key cannot refer to multiple filenames")
+            media_names[media_key] = filename
+            if type(segment_index) is not int or segment_index < 1:
+                raise ValueError("Scene segment index is invalid")
+            if (
+                isinstance(start_seconds, bool)
+                or isinstance(end_seconds, bool)
+                or not isinstance(start_seconds, (int, float))
+                or not isinstance(end_seconds, (int, float))
+            ):
+                raise ValueError("Scene timestamps are invalid")
+            try:
+                start_seconds = float(start_seconds)
+                end_seconds = float(end_seconds)
+            except (OverflowError, ValueError) as error:
+                raise ValueError("Scene timestamps are invalid") from error
+            if (
+                not math.isfinite(start_seconds)
+                or not math.isfinite(end_seconds)
+                or start_seconds < 0
+                or end_seconds <= start_seconds
+            ):
+                raise ValueError("Scene timestamps are invalid")
+            if not isinstance(caption, str) or len(caption) > 2000:
+                raise ValueError("Scene caption is invalid")
+            if (
+                not isinstance(tags, list)
+                or len(tags) > 8
+                or any(not isinstance(tag, str) or not tag or len(tag) > 100 for tag in tags)
+            ):
+                raise ValueError("Scene tags are invalid")
+            key = (media_key, segment_index)
+            if key in seen:
+                raise ValueError("Scene media key and segment index must be unique")
+            seen.add(key)
+            normalized.append(
+                (
+                    media_key,
+                    filename,
+                    segment_index,
+                    start_seconds,
+                    end_seconds,
+                    caption,
+                    json.dumps(tags, ensure_ascii=False),
+                )
+            )
+
+        project_id = self.create_project(project_name)
+        with self.connection:
+            self.connection.execute(
+                "DELETE FROM source_media WHERE project_id = ?", (project_id,)
+            )
+            media: dict[str, str] = {}
+            for media_key, filename, *_rest in normalized:
+                media.setdefault(media_key, filename)
+            source_ids: dict[str, int] = {}
+            for media_key, filename in media.items():
+                cursor = self.connection.execute(
+                    """
+                    INSERT INTO source_media(
+                        project_id, filename, file_path, file_size, media_type
+                    ) VALUES (?, ?, ?, 0, 'video')
+                    """,
+                    (project_id, filename, f"muse-index://{project_id}/{media_key}"),
+                )
+                source_ids[media_key] = int(cursor.lastrowid)
+            self.connection.executemany(
+                """
+                INSERT INTO scene_segments(
+                    source_media_id, segment_index, start_seconds, end_seconds,
+                    thumbnail_path, caption, tags_json, model, source_mtime_ns,
+                    threshold, max_segment_seconds
+                ) VALUES (?, ?, ?, ?, '', ?, ?, 'local-index', NULL, 0.35, 8.0)
+                """,
+                [
+                    (
+                        source_ids[media_key],
+                        segment_index,
+                        start_seconds,
+                        end_seconds,
+                        caption,
+                        tags_json,
+                    )
+                    for (
+                        media_key,
+                        _filename,
+                        segment_index,
+                        start_seconds,
+                        end_seconds,
+                        caption,
+                        tags_json,
+                    ) in normalized
+                ],
+            )
+        return len(normalized)
