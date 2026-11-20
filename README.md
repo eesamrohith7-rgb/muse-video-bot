@@ -54,7 +54,7 @@ cd /path/to/muse-video-bot
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-pip install -e ".[dev]"
+pip install ".[dev]"
 ```
 
 Verify FFprobe:
