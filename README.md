@@ -1,18 +1,21 @@
 # AI Construction Reel Production System
 
-This project is currently a local footage scanner and indexer for house-construction
-libraries. It recursively identifies supported media, records metadata in SQLite,
-and keeps the original files untouched. Muse AI remains the editing engine.
+This project is a local footage scanner and scene-search tool for house-construction
+libraries. It records metadata, detects scene changes, and creates visual captions
+and tags on the local machine. Meta Muse remains a separate editing destination.
 
-Reel analysis, scene detection, AI creative direction, editing briefs, and the web
-interface are planned for later phases and are not included in this version.
+The tool does not edit, move, rename, or delete source footage. The optional Muse
+connector API is a local read-only prototype; it is not listed in or connected to
+Meta Muse.
 
 ## Current phase
 
-**Phase 1: footage scanning and indexing**
+**Phase 2: scanning, scene segmentation, and local visual tags**
 
-The working scanner recursively finds supported media, extracts metadata without
-modifying the source, and stores it in SQLite.
+The scanner recursively finds supported media, extracts metadata without changing
+the source, and stores it in SQLite. Video analysis detects scene cuts, splits long
+shots into shorter segments, extracts small preview frames, and tags those frames
+with a local Ollama vision model.
 
 Supported files:
 
@@ -31,11 +34,16 @@ installer script directly:
 brew install ffmpeg
 ```
 
-Optional tools for later phases:
+Install Ollama for local visual tagging. Then download the 3.2 GB vision model once:
 
 ```bash
-brew install python@3.12
+ollama pull qwen2.5vl:3b
 ```
+
+The footage frames are sent only to the Ollama service on this Mac. For scene
+segmentation without visual captions or tags, use `analyze --no-tags`.
+Captions and tags are model suggestions; review them before using them to choose
+shots.
 
 ## Setup
 
@@ -70,6 +78,17 @@ List media:
 construction-reel list --project "Riverside Villa"
 ```
 
+Analyze indexed videos and search their segments:
+
+```bash
+construction-reel analyze --project "Riverside Villa"
+construction-reel search "wall framing" --project "Riverside Villa"
+```
+
+Re-running `analyze` skips videos whose file timestamp, scene threshold, and model
+match the saved analysis. Preview frames are stored beside the database in
+`scene_previews/`; the original videos stay where they are.
+
 Use a custom database location:
 
 ```bash
@@ -77,6 +96,27 @@ construction-reel --db data/footage.sqlite scan "/path/to/footage" --project "Pr
 ```
 
 The scanner never moves, renames, or deletes source files.
+
+## Local connector prototype
+
+The read-only API lets a future Muse connector search indexed scene captions and
+tags. It binds to localhost only, returns metadata without local file paths or image
+bytes, and requires a bearer token:
+
+```bash
+export MUSE_REEL_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+construction-reel serve
+```
+
+Available endpoints are `GET /v1/projects` and
+`GET /v1/scenes/search?project=Riverside%20Villa&q=framing`. Send the token as
+`Authorization: Bearer <token>`.
+
+This local server cannot be connected directly from Meta Muse. A Muse listing needs
+a hosted HTTPS endpoint, authentication and privacy documentation, business
+verification, test access, and Meta review. See the official
+[Muse connector guidelines](https://platform.muse.ai/docs). Do not expose the local
+API to the public internet as-is.
 
 ## Scan behavior
 
@@ -88,8 +128,7 @@ The scanner never moves, renames, or deletes source files.
 - Reuses source rows by canonical file path and updates metadata if a file changes.
 - Stores import and update timestamps.
 
-## Phase 2 and beyond
+## Later phases
 
-Later phases will add proxy generation, scene detection, segmentation, AI analysis,
-search, creative generation, Muse AI export, and the local web UI. Their commands
-and dependencies will be documented when implemented.
+Later phases may add proxy generation, creative direction, editing briefs, Muse
+connector deployment, and the local web UI.

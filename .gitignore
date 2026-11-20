@@ -10,3 +10,4 @@ dist/
 *.sqlite
 *.sqlite3
 AI_REEL_OUTPUT/
+data/scene_previews/
