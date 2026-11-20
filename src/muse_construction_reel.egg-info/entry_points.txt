@@ -1,0 +1,2 @@
+[console_scripts]
+construction-reel = muse_reel.cli:main
