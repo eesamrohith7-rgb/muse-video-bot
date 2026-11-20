@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS source_media (
     fps REAL,
     creation_date TEXT,
     file_format TEXT,
+    mtime_ns INTEGER,
     first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -66,7 +67,20 @@ class FootageDatabase:
         self.connection.row_factory = sqlite3.Row
         self.connection.execute("PRAGMA foreign_keys = ON")
         self.connection.executescript(SCHEMA)
+        self._migrate_source_media()
         self.connection.commit()
+
+    def _migrate_source_media(self) -> None:
+        columns = {
+            row["name"]
+            for row in self.connection.execute(
+                "PRAGMA table_info(source_media)"
+            ).fetchall()
+        }
+        if "mtime_ns" not in columns:
+            self.connection.execute(
+                "ALTER TABLE source_media ADD COLUMN mtime_ns INTEGER"
+            )
 
     def close(self) -> None:
         self.connection.close()
@@ -145,6 +159,7 @@ class FootageDatabase:
             metadata.fps,
             metadata.creation_date,
             metadata.file_format,
+            metadata.mtime_ns,
         )
         with self.connection:
             if existing is None:
@@ -153,8 +168,8 @@ class FootageDatabase:
                     INSERT INTO source_media(
                         project_id, filename, file_path, file_size, media_type,
                         duration_seconds, width, height, fps, creation_date,
-                        file_format
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        file_format, mtime_ns
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                         (
                             project_id,
@@ -168,6 +183,7 @@ class FootageDatabase:
                             metadata.fps,
                             metadata.creation_date,
                             metadata.file_format,
+                            metadata.mtime_ns,
                         ),
                 )
                 return "indexed", False
@@ -185,6 +201,7 @@ class FootageDatabase:
                         "fps",
                         "creation_date",
                         "file_format",
+                        "mtime_ns",
                     ),
                     values,
                 )
@@ -194,7 +211,7 @@ class FootageDatabase:
                 UPDATE source_media
                 SET filename = ?, file_size = ?, media_type = ?,
                     duration_seconds = ?, width = ?, height = ?, fps = ?,
-                    creation_date = ?, file_format = ?,
+                    creation_date = ?, file_format = ?, mtime_ns = ?,
                     last_seen_at = CURRENT_TIMESTAMP,
                     last_updated_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE last_updated_at END
                 WHERE id = ?

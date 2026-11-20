@@ -1,8 +1,11 @@
 # AI Construction Reel Production System
 
-This project turns raw house-construction footage into searchable, analyzed, and
-selected reels while keeping the original files untouched. Muse AI remains the
-editing engine.
+This project is currently a local footage scanner and indexer for house-construction
+libraries. It recursively identifies supported media, records metadata in SQLite,
+and keeps the original files untouched. Muse AI remains the editing engine.
+
+Reel analysis, scene detection, AI creative direction, editing briefs, and the web
+interface are planned for later phases and are not included in this version.
 
 ## Current phase
 
@@ -20,10 +23,11 @@ The index currently tracks projects, source media, and imported file metadata.
 
 ## macOS prerequisites
 
-Install Homebrew and FFmpeg:
+Install FFmpeg and, if needed, Python using Homebrew. Follow the official
+[Homebrew installation instructions](https://brew.sh/) rather than running an
+installer script directly:
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 brew install ffmpeg
 ```
 
@@ -35,10 +39,10 @@ brew install python@3.12
 
 ## Setup
 
-From this repository:
+From a clone of this repository:
 
 ```bash
-cd "/Users/eesamrohith/Documents/MUSE video bot"
+cd /path/to/muse-video-bot
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -89,4 +93,3 @@ The scanner never moves, renames, or deletes source files.
 Later phases will add proxy generation, scene detection, segmentation, AI analysis,
 search, creative generation, Muse AI export, and the local web UI. Their commands
 and dependencies will be documented when implemented.
-

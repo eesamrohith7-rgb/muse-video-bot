@@ -6,7 +6,7 @@ import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from PIL import Image
 
@@ -18,14 +18,23 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 SUPPORTED_EXTENSIONS = VIDEO_EXTENSIONS | IMAGE_EXTENSIONS
 
 
-def find_media(root: str | Path) -> Iterable[Path]:
+def find_media(
+    root: str | Path,
+    on_error: Callable[[OSError], None] | None = None,
+) -> Iterable[Path]:
     root_path = Path(root).expanduser()
     if not root_path.exists():
         raise FileNotFoundError(f"Footage folder not found: {root_path}")
     if not root_path.is_dir():
         raise NotADirectoryError(f"Footage path is not a folder: {root_path}")
 
-    for directory, dirnames, filenames in os.walk(root_path):
+    def report_walk_error(error: OSError) -> None:
+        if on_error is not None:
+            on_error(error)
+
+    for directory, dirnames, filenames in os.walk(
+        root_path, onerror=report_walk_error
+    ):
         dirnames[:] = sorted(
             name
             for name in dirnames
@@ -111,6 +120,7 @@ def scan_media(path: Path) -> MediaMetadata:
             fps=None,
             creation_date=creation_date,
             file_format=suffix.lstrip(".").upper(),
+            mtime_ns=stat.st_mtime_ns,
         )
 
     probe = probe_video(path)
@@ -144,5 +154,5 @@ def scan_media(path: Path) -> MediaMetadata:
         fps=fps,
         creation_date=creation_date,
         file_format=file_format,
+        mtime_ns=stat.st_mtime_ns,
     )
-

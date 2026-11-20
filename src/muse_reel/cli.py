@@ -106,11 +106,18 @@ def main() -> None:
 
         if args.command == "scan":
             root = str(Path(args.folder).expanduser().resolve())
-            media_paths = list(find_media(root))
+            traversal_errors: list[str] = []
+
+            def report_traversal_error(error: OSError) -> None:
+                message = str(error) or error.__class__.__name__
+                traversal_errors.append(message)
+                print(f"\nERROR accessing directory: {message}", flush=True)
+
+            media_paths = list(find_media(root, on_error=report_traversal_error))
             scan_id = database.start_scan(project_id, root)
             indexed = 0
             updated = 0
-            errors = 0
+            errors = len(traversal_errors)
 
             print(f"Scanning {root}")
             for index, path in enumerate(media_paths, start=1):
@@ -148,4 +155,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

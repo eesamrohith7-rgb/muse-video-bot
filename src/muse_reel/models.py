@@ -16,4 +16,4 @@ class MediaMetadata:
     fps: Optional[float]
     creation_date: Optional[str]
     file_format: Optional[str]
-
+    mtime_ns: Optional[int] = None
